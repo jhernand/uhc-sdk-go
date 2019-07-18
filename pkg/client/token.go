@@ -266,6 +266,12 @@ func (c *Connection) sendTokenFormTimed(ctx context.Context, form url.Values) (c
 		return
 	}
 
+	// Notify the creation of the new tokens:
+	if c.tokensChannel != nil {
+		c.tokensChannel <- *msg.AccessToken
+		c.tokensChannel <- *msg.RefreshToken
+	}
+
 	// Save the new tokens:
 	c.accessToken = accessToken
 	c.refreshToken = refreshToken

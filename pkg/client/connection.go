@@ -64,18 +64,19 @@ var DefaultScopes = []string{
 // function instead.
 type ConnectionBuilder struct {
 	// Basic attributes:
-	logger       Logger
-	trustedCAs   *x509.CertPool
-	insecure     bool
-	tokenURL     string
-	clientID     string
-	clientSecret string
-	apiURL       string
-	agent        string
-	user         string
-	password     string
-	tokens       []string
-	scopes       []string
+	logger        Logger
+	trustedCAs    *x509.CertPool
+	insecure      bool
+	tokenURL      string
+	clientID      string
+	clientSecret  string
+	apiURL        string
+	agent         string
+	user          string
+	password      string
+	tokens        []string
+	scopes        []string
+	tokensChannel chan<- string
 
 	// Metrics:
 	subsystem string
@@ -85,23 +86,24 @@ type ConnectionBuilder struct {
 // of this type directly, use the builder instead.
 type Connection struct {
 	// Basic attributes:
-	closed       bool
-	logger       Logger
-	trustedCAs   *x509.CertPool
-	insecure     bool
-	client       *http.Client
-	tokenURL     *url.URL
-	clientID     string
-	clientSecret string
-	apiURL       *url.URL
-	agent        string
-	user         string
-	password     string
-	tokenMutex   *sync.Mutex
-	tokenParser  *jwt.Parser
-	accessToken  *jwt.Token
-	refreshToken *jwt.Token
-	scopes       []string
+	closed        bool
+	logger        Logger
+	trustedCAs    *x509.CertPool
+	insecure      bool
+	client        *http.Client
+	tokenURL      *url.URL
+	clientID      string
+	clientSecret  string
+	apiURL        *url.URL
+	agent         string
+	user          string
+	password      string
+	tokenMutex    *sync.Mutex
+	tokenParser   *jwt.Parser
+	accessToken   *jwt.Token
+	refreshToken  *jwt.Token
+	scopes        []string
+	tokensChannel chan<- string
 
 	// Metrics:
 	tokenCountMetric    *prometheus.CounterVec
@@ -321,6 +323,16 @@ func (b *ConnectionBuilder) Metrics(value string) *ConnectionBuilder {
 	return b
 }
 
+// TokensChannel sets the channel that the connection will use to notify when a new token has been
+// received from the authentication service. The same channel will be used to notify for access
+// tokens and refresh tokens, so it is the responsibility of the user of the connection to check the
+// type of the token and handle it correctly. This is optional, and if not specified then nothing
+// will be notified.
+func (b *ConnectionBuilder) TokensChannel(value chan<- string) *ConnectionBuilder {
+	b.tokensChannel = value
+	return b
+}
+
 // Build uses the configuration stored in the builder to create a new connection. The builder can be
 // reused to create multiple connections with the same configuration. It returns a pointer to the
 // connection, and an error if something fails when trying to create it.
@@ -507,21 +519,22 @@ func (b *ConnectionBuilder) BuildContext(ctx context.Context) (connection *Conne
 
 	// Allocate and populate the connection object:
 	connection = &Connection{
-		logger:       logger,
-		trustedCAs:   b.trustedCAs,
-		insecure:     b.insecure,
-		client:       client,
-		tokenURL:     tokenURL,
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		apiURL:       apiURL,
-		agent:        agent,
-		user:         b.user,
-		password:     b.password,
-		tokenParser:  tokenParser,
-		accessToken:  accessToken,
-		refreshToken: refreshToken,
-		scopes:       scopes,
+		logger:        logger,
+		trustedCAs:    b.trustedCAs,
+		insecure:      b.insecure,
+		client:        client,
+		tokenURL:      tokenURL,
+		clientID:      clientID,
+		clientSecret:  clientSecret,
+		apiURL:        apiURL,
+		agent:         agent,
+		user:          b.user,
+		password:      b.password,
+		tokenParser:   tokenParser,
+		accessToken:   accessToken,
+		refreshToken:  refreshToken,
+		scopes:        scopes,
+		tokensChannel: b.tokensChannel,
 	}
 
 	// Create the mutex that protects token manipulations:
@@ -605,6 +618,9 @@ func (c *Connection) Close() error {
 	err := c.checkClosed()
 	if err != nil {
 		return err
+	}
+	if c.tokensChannel != nil {
+		close(c.tokensChannel)
 	}
 	c.closed = true
 	return nil
